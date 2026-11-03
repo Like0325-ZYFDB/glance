@@ -20,7 +20,7 @@ from pathlib import Path
 
 import requests
 
-from . import autostart, translate, win32
+from . import __version__, autostart, translate, win32
 from .capture.clipboard import copy_selection_text, set_clipboard_text
 from .capture.geometry import place_card
 from .config import HOTKEY_LABELS, Config, apply_settings, hotkey_text
@@ -96,7 +96,7 @@ class App:
     def run(self) -> None:
         import webview
         log("=" * 40)
-        log(f"[启动] 一瞥 2.0（数据目录 {DATA}{'，便携模式' if PORTABLE else ''}）")
+        log(f"[启动] 一瞥 {__version__}（数据目录 {DATA}{'，便携模式' if PORTABLE else ''}）")
         translate.configure(self.cfg["baidu_appid"], self.cfg["baidu_key"])
         threading.Thread(target=self._load_engine, daemon=True, name="engine").start()
         threading.Thread(target=self._start_capture, daemon=True, name="capture-start").start()
