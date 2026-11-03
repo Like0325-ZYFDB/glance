@@ -124,6 +124,7 @@ class App:
 
     def _after_start(self) -> None:
         time.sleep(2.5)
+        self.warm_translate()  # 必应翻译要先取一次参数，启动时顺手取好
         self.wm.prime("float")
         if self.cfg.get("selection_button", True):  # 划词按钮也提前备好，第一次划词就能出现
             self.wm.create("selbtn")
@@ -490,6 +491,8 @@ class App:
             self._drag_start = (pos, now)
             self._drag_key = False
         if lbutton and self._drag_start is not None and vk and win32.key_down(vk):
+            if not self._drag_key:
+                self.warm_translate()  # 还在选文字时就先连好翻译服务，松开鼠标时省掉建连接的一两秒
             self._drag_key = True  # 松开左键前任何时候按住过都算：先按键再拖、拖到一半再按都行
         if not lbutton and self._drag_start is not None:
             (sx, sy), t0 = self._drag_start
@@ -509,7 +512,12 @@ class App:
                 threading.Thread(target=self.translate_selection, kwargs={"quiet": True},
                                  daemon=True, name="translate").start()
 
+    def warm_translate(self) -> None:
+        if self.cfg.get("online_translate", True):
+            translate.warm()
+
     def show_selection_button(self, pos) -> None:
+        self.warm_translate()  # 出按钮时先连好，点按钮时翻译就快
         w = self.wm.wins["selbtn"]
         if w.window is None:
             self.wm.create("selbtn")
@@ -540,6 +548,7 @@ class App:
         if action == "lookup":
             self.open_lookup("")
         elif action == "translate":
+            self.warm_translate()
             self.translate_selection()
         elif action == "capture":
             x, y = win32.cursor_pos()
@@ -623,18 +632,20 @@ class App:
     def show_translate(self, text: str) -> None:
         if self.hover.visible:
             self.hide_float()
-        self.wm.call("translate", "render", {"original": text, "loading": True, "prefs": self.prefs()})
-        self.wm.show_window("translate")
-        translated, source = None, ""
         online = bool(self.cfg.get("online_translate", True))
-        if online:
-            translated = translate.translate(text)
-            source = translate.last_source()
+        # 句中生词查的是本地词典，马上就有：先和原文一起显示，联网译文回来再补上
         words = []
         if self.engine is not None and self.engine.books:
             def brief(w):
                 return card_brief(build_card(self.engine, w), 40) or ""
             words = pick_new_words(text, brief, rank=self.engine.rank, saved=self.vocab.words())
+        self.wm.call("translate", "render", {"original": text, "loading": online, "online": online,
+                                             "words": words, "prefs": self.prefs()})
+        self.wm.show_window("translate")
+        if not online:
+            return
+        translated = translate.translate(text)
+        source = translate.last_source()
         self.wm.call("translate", "render", {
             "original": text, "loading": False, "translated": translated, "source": source,
             "online": online, "words": words, "prefs": self.prefs()})

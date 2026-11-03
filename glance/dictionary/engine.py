@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .books import Entry, EcdictBook, open_book
-from .morph import edit_distance
+from .morph import edit_distance, inflection_candidates
 
 
 class DictEngine:
@@ -70,9 +70,17 @@ class DictEngine:
         rank = {w: self.rank(w) or 10 ** 9 for w in scored}
         return sorted(scored, key=lambda w: (scored[w], rank[w], len(w), w))[:limit]
 
-    def rank(self, word: str) -> int | None:
+    def _rank(self, word: str) -> int | None:
         ranks = [r for r in (b.rank(word) for b in self.books) if r]
         return min(ranks) if ranks else None
+
+    def rank(self, word: str) -> int | None:
+        """词频排名（越小越常用）。ECDICT 只给原形标了词频：变形词（plays、researchers）用原形的。"""
+        for w in inflection_candidates(word) or [word]:  # 第一个就是词本身
+            r = self._rank(w)
+            if r:
+                return r
+        return None
 
     def book(self, path: str):
         for b in self.books:

@@ -141,3 +141,18 @@ def test_ecdict_fuzzy_prefers_common_words(tmp_path):
     assert eng.fuzzy("teh")[0] == "the"
     assert eng.fuzzy("hte")[0] == "the"
     assert eng.fuzzy("recieve")[:2] == ["receive", "relieve"]
+
+
+def test_rank_falls_back_to_base_form(tmp_path):
+    # ECDICT 里变形词没有词频：plays 要按 play 算常用，句中生词里才不会列出它
+    path = tmp_path / "ecdict.csv"
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["word", "phonetic", "definition", "translation", "pos", "collins", "oxford",
+                    "tag", "bnc", "frq", "exchange"])
+        w.writerow(["play", "", "", "玩", "", 0, 0, "", 200, 200, "3:plays"])
+        w.writerow(["plays", "", "", "play的第三人称单数", "", 0, 0, "", 0, 0, "0:play"])
+        w.writerow(["serendipity", "", "", "机缘", "", 0, 0, "", 0, 0, ""])
+    eng = DictEngine([(str(path), "ECDICT")], cache_dir=tmp_path / "cache")
+    assert eng.rank("plays") == 200 and eng.rank("play") == 200
+    assert eng.rank("serendipity") is None

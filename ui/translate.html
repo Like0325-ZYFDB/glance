@@ -62,7 +62,7 @@
     }
     var words = d.words || [];
     var box = $("words");
-    if (!words.length || d.loading) { box.style.display = "none"; return; }
+    if (!words.length) { box.style.display = "none"; return; }
     box.style.display = "";
     box.innerHTML = '<div class="label">句中生词（常用词已略过）</div>' + words.map(function (w, i) {
       return '<div class="row"><button class="icon-btn gold' + (w.saved ? " on" : "") + '" data-star="' + i + '" title="收进生词本">' +
