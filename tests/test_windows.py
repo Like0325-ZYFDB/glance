@@ -66,3 +66,81 @@ def test_hotkey_parse():
     mods, vk = parse_hotkey("ctrl+alt+d")
     assert mods & MOD_CONTROL and mods & MOD_ALT and vk == 0x44
     assert valid_hotkey("ctrl+alt+f5") and not valid_hotkey("shift+d") and not valid_hotkey("ctrl+alt")
+
+
+def test_translate_word_fallback(monkeypatch):
+    """词典里没有的词：联网翻译一次后缓存；原样返回、关了联网翻译、中文都不给结果。"""
+    from glance import app, translate
+    calls = []
+
+    def fake(text, deadline=10.0):
+        calls.append(text)
+        return {"serendipity": "意外发现珍宝的运气", "xyzzy": "xyzzy"}.get(text)
+
+    monkeypatch.setattr(translate, "translate", fake)
+    monkeypatch.setattr(translate, "last_source", lambda: "测试")
+    fake_app = _fake_float_app(app)
+    tw = fake_app.translate_word
+    assert tw("serendipity") == ("意外发现珍宝的运气", "测试")
+    assert tw("Serendipity") == ("意外发现珍宝的运气", "测试") and calls == ["serendipity"]  # 走缓存
+    assert tw("xyzzy") is None  # 原样返回算翻不出来
+    assert tw("中文") is None
+    fake_app.cfg["online_translate"] = False
+    assert tw("hello") is None and "hello" not in calls
+
+
+def _fake_float_app(app, **kw):
+    """只带浮窗状态的假 App：用来测取词后台填翻译这类逻辑，不建真窗口。"""
+    import threading
+    from types import SimpleNamespace
+    shown, hidden = [], []
+    fake = SimpleNamespace(cfg={"online_translate": True}, _word_tr={}, _float_lock=threading.Lock(),
+                           hover=SimpleNamespace(visible=True, pinned=False), float_word="xenial",
+                           float_box=(1, 2, 3, 4), shown=shown, hidden=hidden,
+                           show_float=lambda d, b: shown.append((d, b)), hide_float=lambda: hidden.append(1))
+    fake.translate_word = lambda w: app.App.translate_word(fake, w)
+    fake.can_translate_word = lambda w: app.App.can_translate_word(fake, w)
+    for k, v in kw.items():
+        setattr(fake, k, v)
+    return fake
+
+
+def test_fill_online_updates_float(monkeypatch):
+    from glance import app, translate
+    monkeypatch.setattr(translate, "translate", lambda t, deadline=10.0: "好客的")
+    monkeypatch.setattr(translate, "last_source", lambda: "测试")
+    fake = _fake_float_app(app)
+    data = {"query": "xenial", "card": None, "online": {"loading": True}}
+    app.App._fill_online(fake, "xenial", data, (1, 2, 3, 4), False)
+    assert fake.shown and fake.shown[0][0]["online"] == {"text": "好客的", "source": "测试"}
+    # 浮窗已经换了别的词：不覆盖
+    fake = _fake_float_app(app, float_word="other")
+    app.App._fill_online(fake, "xenial", data, (1, 2, 3, 4), False)
+    assert not fake.shown and not fake.hidden
+
+
+def test_fill_online_failure(monkeypatch):
+    from glance import app, translate
+    monkeypatch.setattr(translate, "translate", lambda t, deadline=10.0: None)
+    data = {"query": "xenial", "card": None, "online": {"loading": True}}
+    fake = _fake_float_app(app)
+    app.App._fill_online(fake, "xenial", data, (1, 2, 3, 4), False)
+    assert fake.hidden and not fake.shown  # 按住键扫过、翻不出来：收起
+    fake = _fake_float_app(app)
+    app.App._fill_online(fake, "xenial", data, (1, 2, 3, 4), True)
+    assert fake.shown and fake.shown[0][0]["online"] is None and "没有结果" in fake.shown[0][0]["status"]
+
+
+def test_translate_selection_quiet(monkeypatch):
+    """按住划词键拖动后自动翻译：读不到文字时不弹提示；按快捷键时照常提示。"""
+    from types import SimpleNamespace
+
+    from glance import app
+    monkeypatch.setattr(app, "copy_selection_text", lambda: None)
+    notes = []
+    fake = SimpleNamespace(capture=None, notify=notes.append, show_translate=lambda t: notes.append("shown"),
+                           cfg={"hotkeys": {"translate": "ctrl+alt+t"}})
+    app.App.translate_selection(fake, quiet=True)
+    assert notes == []
+    app.App.translate_selection(fake)
+    assert len(notes) == 1 and "没读到" in notes[0]

@@ -62,12 +62,13 @@ class DictEngine:
         return seen
 
     def fuzzy(self, word: str, limit: int = 5, max_dist: int = 2) -> list[str]:
-        """拼写纠错候选（跨词典汇总，距离近的在前）。"""
+        """拼写纠错候选（跨词典汇总，距离近的在前；距离一样时常用词在前）。"""
         scored: dict[str, int] = {}
         for book in self.books:
             for w in book.fuzzy(word, max_dist):
                 scored.setdefault(w, edit_distance(w, word.casefold(), max_dist))
-        return sorted(scored, key=lambda w: (scored[w], len(w), w))[:limit]
+        rank = {w: self.rank(w) or 10 ** 9 for w in scored}
+        return sorted(scored, key=lambda w: (scored[w], rank[w], len(w), w))[:limit]
 
     def rank(self, word: str) -> int | None:
         ranks = [r for r in (b.rank(word) for b in self.books) if r]

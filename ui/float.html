@@ -27,6 +27,7 @@
   #tabs .hint { font-size: 11px; color: var(--text-3); padding: 0 4px; white-space: nowrap; }
   .notfound { margin-top: 8px; color: var(--text-2); font-size: 13px; }
   .notfound a { margin-right: 10px; }
+  .online { margin-top: 8px; font-size: 14px; line-height: 1.6; color: var(--text); }
 </style>
 </head>
 <body>
@@ -57,7 +58,14 @@
   function renderCard() {
     var card = data.card || { word: data.query, found: false };
     var h = WW.card(card, { actions: actions(), compact: true });
-    if (!card.found) {
+    if (!card.found && data.online && data.online.loading) {
+      h += '<div class="notfound">' + (data.status ? WW.esc(data.status) + "<br>" : "") + "联网翻译中…</div>";
+    } else if (!card.found && data.online) {
+      // 词典里没有（或还没装词典）：显示联网翻译
+      h += '<div class="online">' + WW.esc(data.online.text) + "</div>" +
+        '<div class="wc-note">联网翻译' + (data.online.source ? "（" + WW.esc(data.online.source) + "）" : "") +
+        (data.status ? "　" + WW.esc(data.status) : "") + "</div>";
+    } else if (!card.found) {
       h += '<div class="notfound">' + WW.esc(data.status || "词典里没有这个词");
       if ((data.did_you_mean || []).length) {
         h += '<div style="margin-top:6px">你要找的是不是：' + data.did_you_mean.map(function (w) {
@@ -144,7 +152,8 @@
     else if (act === "pin") { pinned = !pinned; WW.api().float_pin(pinned); renderCard(); }
     else if (act === "open") WW.api().open_lookup(word);
     else if (act === "star") {
-      var brief = ((data.card && data.card.senses) || []).slice(0, 3).map(function (s) { return (s.pos + " " + s.text).trim(); }).join("；");
+      var brief = ((data.card && data.card.senses) || []).slice(0, 3).map(function (s) { return (s.pos + " " + s.text).trim(); }).join("；") ||
+        (data.online && data.online.text) || "";
       WW.api().vocab_toggle(word, brief).then(function (on) {
         saved = on; renderCard(); WW.toast(on ? "已收进生词本" : "已移出生词本");
       });

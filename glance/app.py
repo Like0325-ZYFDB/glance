@@ -78,6 +78,7 @@ class App:
         self._cap_want: tuple | None = None
         self._cap_busy = False
         self._cap_seq = 0
+        self._word_tr: dict[str, tuple[str, str]] = {}  # 词典查不到的词的联网翻译缓存
         # 划词按钮
         self._drag_start: tuple | None = None
         self._drag_key = False  # 这次按下左键期间有没有按住划词键
@@ -333,15 +334,58 @@ class App:
                 if alt.get("card") and alt["card"]["found"]:
                     note, data = f"识别为「{word}」，按「{cand}」显示", alt
                     break
-        if not (data.get("card") and data["card"]["found"]) and not manual:
+        found = bool(data.get("card") and data["card"]["found"])
+        online_later = False
+        if not found and self.can_translate_word(word):
+            # 词典里没有（或还没装词典）：联网翻一下这个词。先出浮窗显示「翻译中」，
+            # 结果在后台取，取词线程不用干等几秒，鼠标移到别的词上照样马上换
+            cached = self._word_tr.get(word.lower())
+            data["online"] = {"text": cached[0], "source": cached[1]} if cached else {"loading": True}
+            online_later = not cached
+        if not (found or data.get("online")) and not manual:
             return
         if self._stale(seq):
             return
         data["status"] = note or data.get("status", "")
         log(f"[取词] {word} ← {res.get('via')} {res.get('ms')}ms")
         self.show_float(data, box)
+        if online_later:
+            threading.Thread(target=self._fill_online, args=(word, data, box, manual),
+                             daemon=True, name="word-translate").start()
         if data.get("card") and data["card"]["found"] and self.cfg.get("auto_speak"):
             self.wm.call("float", "speakHead", None)
+
+    def can_translate_word(self, word: str) -> bool:
+        return bool(self.cfg.get("online_translate", True) and ENGLISH.search(word))
+
+    def translate_word(self, word: str) -> tuple[str, str] | None:
+        """单个词的联网翻译（译文, 来源）；关了联网翻译、翻不出来或原样返回时为 None。"""
+        if not self.can_translate_word(word):
+            return None
+        key = word.lower()
+        if key in self._word_tr:
+            return self._word_tr[key]
+        text = (translate.translate(word, deadline=4.0) or "").strip()
+        if not text or text.lower() == key:
+            return None  # 翻不出来不缓存：下次再试
+        if len(self._word_tr) >= 500:
+            self._word_tr.clear()
+        self._word_tr[key] = (text, translate.last_source())
+        return self._word_tr[key]
+
+    def _fill_online(self, word: str, data: dict, box: tuple, manual: bool) -> None:
+        """后台取到联网翻译后填进浮窗；浮窗已经换了词或收起了就不管。"""
+        online = self.translate_word(word)
+        with self._float_lock:
+            same = self.hover.visible and self.float_word == data.get("query") and self.float_box == box
+        if not same:
+            return
+        if online:
+            self.show_float(dict(data, online={"text": online[0], "source": online[1]}), box)
+        elif manual or self.hover.pinned:
+            self.show_float(dict(data, online=None, status=data.get("status") or "词典里没有这个词，联网翻译也没有结果"), box)
+        else:
+            self.hide_float()  # 按住键扫过的词翻不出来（多半是认错的字）：直接收起，不留空浮窗
 
     # ================= 浮窗 =================
     def show_float(self, data: dict, box: tuple) -> None:
@@ -456,8 +500,14 @@ class App:
             last_t, last_p = self._last_click
             double = now - last_t < 0.45 and abs(pos[0] - last_p[0]) < 5 and abs(pos[1] - last_p[1]) < 5
             self._last_click = (now, pos)
-            if (dragged or double) and (vk is None or self._drag_key):
-                self.show_selection_button(pos)
+            if not (dragged or double):
+                return
+            if vk is None:
+                self.show_selection_button(pos)  # 不用按键：先出按钮，点了才翻译，免得拖窗口也翻
+            elif self._drag_key:
+                # 按住划词键选的文字：意思很明确，直接翻译，不用再点按钮
+                threading.Thread(target=self.translate_selection, kwargs={"quiet": True},
+                                 daemon=True, name="translate").start()
 
     def show_selection_button(self, pos) -> None:
         w = self.wm.wins["selbtn"]
@@ -553,7 +603,8 @@ class App:
             self.wm.call("settings", "render", self.settings_payload())
         threading.Thread(target=run, daemon=True).start()
 
-    def translate_selection(self, skip_uia: bool = False) -> None:
+    def translate_selection(self, skip_uia: bool = False, quiet: bool = False) -> None:
+        """quiet：按住划词键拖动后自动触发的，读不到文字（拖的是窗口、文件）就悄悄算了。"""
         text = None
         if not skip_uia and self.capture is not None:
             try:
@@ -563,6 +614,8 @@ class App:
         if not text:  # 选区接口读不到：模拟一次复制再读剪贴板（读完恢复原剪贴板）
             text = copy_selection_text()
         if not text:
+            if quiet:
+                return
             self.notify(f"没读到选中的文字：先选中一段文字，再按 {hotkey_text(self.cfg['hotkeys']['translate'])}")
             return
         self.show_translate(text.strip()[:3000])

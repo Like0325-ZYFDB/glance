@@ -111,3 +111,33 @@ def test_ecdict_fuzzy_not_cut_off_by_earlier_words(tmp_path):
         w.writerow(["dictionary", "", "", "词典", "", 0, 0, "", 0, 0, ""])
     eng = DictEngine([(str(path), "ECDICT")], cache_dir=tmp_path / "cache")
     assert eng.fuzzy("dictionery", max_dist=1) == ["dictionary"]
+
+
+def test_edit_distance_counts_transposition_as_one():
+    from glance.dictionary.morph import edit_distance, fuzzy_prefixes
+    assert edit_distance("recieve", "receive") == 1   # 相邻字母写反
+    assert edit_distance("teh", "the") == 1
+    assert edit_distance("relieve", "recieve") == 1
+    assert edit_distance("abc", "abc") == 0 and edit_distance("abc", "xyz", 2) == 3
+    assert fuzzy_prefixes("teh") == ["te", "th", "et", "t"]
+    assert fuzzy_prefixes("aab") == ["aa", "ab", "a"]
+
+
+def test_ecdict_fuzzy_prefers_common_words(tmp_path):
+    # 同样距离 1 的候选很多（tea、ted、tee、ten…）：常用的 the 不能被字母序挤掉
+    import string
+    path = tmp_path / "ecdict.csv"
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["word", "phonetic", "definition", "translation", "pos", "collins", "oxford",
+                    "tag", "bnc", "frq", "exchange"])
+        for c in string.ascii_lowercase:
+            w.writerow(["te" + c, "", "", "x", "", 0, 0, "", 0, 0, ""])
+            w.writerow(["t" + c + "h", "", "", "x", "", 0, 0, "", 0, 0, ""])
+        w.writerow(["the", "", "", "这", "", 0, 0, "", 1, 1, ""])
+        w.writerow(["receive", "", "", "收到", "", 0, 0, "", 900, 900, ""])
+        w.writerow(["relieve", "", "", "减轻", "", 0, 0, "", 5000, 5000, ""])
+    eng = DictEngine([(str(path), "ECDICT")], cache_dir=tmp_path / "cache")
+    assert eng.fuzzy("teh")[0] == "the"
+    assert eng.fuzzy("hte")[0] == "the"
+    assert eng.fuzzy("recieve")[:2] == ["receive", "relieve"]

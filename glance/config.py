@@ -43,7 +43,7 @@ DEFAULT_CONFIG: dict = {
     "capture_only_english": True,
     "highlight_word": True,          # 取词时在屏幕上标出取到的那个词
     "selection_button": True,        # 选中文字后在旁边出一个「译」按钮
-    "selection_button_key": "ctrl",  # 按住它再划词才出按钮，免得拖窗口、框选文件时也弹
+    "selection_button_key": "ctrl",  # 按住它划词直接翻译；none 时先出按钮、点了才翻译
     "online_translate": True,
     "baidu_appid": "",
     "baidu_key": "",

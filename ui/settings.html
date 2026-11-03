@@ -76,9 +76,9 @@
       <div class="group">
         <div class="item"><div class="t"><b>标出取到的词</b><span>在屏幕上给取到的那个词加一层浅色底</span></div>
           <label class="switch"><input type="checkbox" data-key="highlight_word"><span></span></label></div>
-        <div class="item"><div class="t"><b>划词翻译按钮</b><span id="selHint"></span></div>
+        <div class="item"><div class="t"><b>划词翻译</b><span id="selHint"></span></div>
           <label class="switch"><input type="checkbox" data-key="selection_button"><span></span></label></div>
-        <div class="item" id="selKeyRow"><div class="t"><b>划词键</b><span>按住它再选文字才出按钮；不用按键时，拖窗口、框选文件也会弹</span></div>
+        <div class="item" id="selKeyRow"><div class="t"><b>划词键</b><span>按住它选文字，松开鼠标直接出翻译；设成不用按键时改为先出按钮、点了才翻译</span></div>
           <div class="seg" data-key="selection_button_key"><button data-v="ctrl">Ctrl</button><button data-v="alt">Alt</button><button data-v="shift">Shift</button><button data-v="none">不用按键</button></div></div>
         <div class="item"><div class="t"><b>只取英文</b><span>指着中文时不弹浮窗</span></div>
           <label class="switch"><input type="checkbox" data-key="capture_only_english"><span></span></label></div>
@@ -207,7 +207,7 @@
     $("delayRow").style.display = s.capture_mode === "hover" ? "" : "none";
     var sk = s.selection_button_key || "ctrl";
     $("selHint").textContent = sk === "none" ? "选中一段文字后，旁边出现一个翻译按钮" :
-      "按住 " + sk.charAt(0).toUpperCase() + sk.slice(1) + " 选中文字，旁边出现一个翻译按钮";
+      "按住 " + sk.charAt(0).toUpperCase() + sk.slice(1) + " 选中文字，松开鼠标直接出翻译";
     $("selKeyRow").style.display = s.selection_button ? "" : "none";
     var c = s.capture || {};
     $("capStatus").textContent = c.ocr === undefined ? "取词服务启动中…" :

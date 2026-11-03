@@ -46,16 +46,30 @@ IRREGULAR = {
 
 
 def edit_distance(a: str, b: str, limit: int = 2) -> int:
-    """编辑距离（超过 limit 提前返回）。"""
+    """编辑距离（超过 limit 提前返回）。相邻两个字母写反（recieve → receive）算一步：这是最常见的拼错。"""
     if abs(len(a) - len(b)) > limit:
         return limit + 1
-    prev = list(range(len(b) + 1))
+    before, prev = None, list(range(len(b) + 1))
     for i, ca in enumerate(a, 1):
         cur = [i]
         for j, cb in enumerate(b, 1):
-            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
-        prev = cur
+            d = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb))
+            if before is not None and j > 1 and ca == b[j - 2] and a[i - 2] == cb:
+                d = min(d, before[j - 2] + 1)
+            cur.append(d)
+        before, prev = prev, cur
     return prev[-1]
+
+
+def fuzzy_prefixes(w: str) -> list[str]:
+    """拼写纠错时依次扫哪几段词（按前缀）。两个字母的前缀词少，不会被条数上限截断：
+    开头两个字母相同的；第二个字母漏写或和第三个写反的（teh → the）；头两个字母写反的（hte → the）；
+    最后按首字母补一遍。"""
+    out = []
+    for p in (w[:2], w[0] + w[2] if len(w) >= 3 else "", w[1::-1] if len(w) >= 2 else "", w[:1]):
+        if p and p not in out:
+            out.append(p)
+    return out
 
 
 VOWELS = set("aeiou")

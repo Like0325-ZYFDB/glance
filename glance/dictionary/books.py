@@ -18,9 +18,10 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .morph import edit_distance, inflection_candidates
+from .morph import edit_distance, fuzzy_prefixes, inflection_candidates
 
 _LINK_RE = re.compile(r"^\s*@@@LINK=(.+?)\s*$")
+FUZZY_PER_BOOK = 12  # 每本词典给几个纠错候选，再由 DictEngine 按距离和词频排
 
 
 def book_id(path: str) -> str:
@@ -155,13 +156,13 @@ class DictBook:
         return out[:limit]
 
     def fuzzy(self, word: str, max_dist: int = 2) -> list[str]:
-        """拼写纠错：首字母相同、编辑距离不超过 max_dist 的词条。"""
+        """拼写纠错：开头相近、编辑距离不超过 max_dist 的词条。"""
         w = self._fold(word)
         if len(w) < 3:
             return []
         best = set()
-        for prefix, cap in ((w[:2], 20000), (w[0], 20000)):  # 同 ECDICT：先查前两个字母相同的
-            scanned = 0
+        for prefix in fuzzy_prefixes(w):
+            scanned, cap = 0, 20000
             lo = bisect.bisect_left(self._sorted, prefix)
             for k in self._sorted[lo:]:
                 if not k.startswith(prefix):
@@ -174,7 +175,7 @@ class DictBook:
                 d = edit_distance(k, w, max_dist)
                 if 0 < d <= max_dist:
                     best.add((d, len(k), k))
-        return [k for _d, _l, k in sorted(best)[:5]]
+        return [k for _d, _l, k in sorted(best)[:FUZZY_PER_BOOK]]
 
     def rank(self, word: str) -> int | None:
         return None  # mdx 词典没有词频信息
@@ -338,11 +339,11 @@ class EcdictBook:
                 return [self._entry(r) for r in hits[:2]]
         return []
 
-    def _prefix_rows(self, sw: str, sql_tail: str = "", *args, limit: int = 400):
+    def _prefix_rows(self, sw: str, sql_tail: str = "", *args, limit: int = 400, cols: str = "word"):
         if not sw:
             return []
         hi = sw[:-1] + chr(ord(sw[-1]) + 1)
-        return self._q("SELECT word FROM stardict WHERE sw >= ? AND sw < ? "
+        return self._q(f"SELECT {cols} FROM stardict WHERE sw >= ? AND sw < ? "
                        + sql_tail + f" LIMIT {int(limit)}", sw, hi, *args)
 
     def suggest(self, prefix: str, limit: int = 8) -> list[str]:
@@ -358,20 +359,23 @@ class EcdictBook:
         sw = strip_word(w)
         if len(w) < 3 or not sw:
             return []
-        # 先查前两个字母相同的（拼错多在后面，这一段词少，不会被条数上限截断），
-        # 再按首字母补一遍：只按首字母查的话，按字母排在后面的词（d 开头里的 dictionary）会被截掉
+        # 先按两个字母的前缀查（这几段词少，不会被条数上限截断），最后按首字母补一遍：
+        # 只按首字母查的话，按字母排在后面的词（d 开头里的 dictionary、t 开头里的 the）会被截掉
         span = (len(sw) - max_dist, len(sw) + max_dist)
+        # 词频一起取出来：同样距离的候选很多时（teh 的 tea、ted、tee、the…）先留常用的
+        cols = "word, frq, bnc" if "frq" in self._cols else "word, 0, 0"
         rows = []
-        if len(sw) >= 2:
-            rows += self._prefix_rows(sw[:2], "AND length(sw) BETWEEN ? AND ?", *span, limit=20000)
-        rows += self._prefix_rows(sw[0], "AND length(sw) BETWEEN ? AND ?", *span, limit=8000)
-        best = set()
-        for (k,) in rows:
+        for p in fuzzy_prefixes(sw):
+            rows += self._prefix_rows(p, "AND length(sw) BETWEEN ? AND ?", *span,
+                                      limit=20000 if len(p) >= 2 else 8000, cols=cols)
+        best: dict[str, tuple] = {}
+        for k, frq, bnc in rows:
             k = k.casefold()
             d = edit_distance(k, w, max_dist)
             if 0 < d <= max_dist:
-                best.add((d, len(k), k))
-        return [k for _d, _l, k in sorted(best)[:5]]
+                rank = min([r for r in (frq, bnc) if r and r > 0] or [10 ** 9])
+                best[k] = min(best.get(k, (d, rank, len(k), k)), (d, rank, len(k), k))
+        return [t[3] for t in sorted(best.values())[:FUZZY_PER_BOOK]]
 
     def rank(self, word: str) -> int | None:
         """词频排名（越小越常用）：取 COCA 与 BNC 排名里较小的那个。"""
