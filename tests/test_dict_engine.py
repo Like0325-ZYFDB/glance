@@ -95,3 +95,19 @@ def test_ecdict_csv(tmp_path):
     # 第二次打开直接用缓存的 sqlite
     again = DictEngine([(str(path), "ECDICT")], cache_dir=tmp_path / "cache")
     assert again.lookup("perch")
+
+
+def test_ecdict_fuzzy_not_cut_off_by_earlier_words(tmp_path):
+    # 真实 ECDICT 里 d 开头的词有几万个：只按首字母取前 8000 条时，dictionary 会被 de… 挤掉
+    import itertools
+    import string
+    path = tmp_path / "ecdict.csv"
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["word", "phonetic", "definition", "translation", "pos", "collins", "oxford",
+                    "tag", "bnc", "frq", "exchange"])
+        for t in itertools.islice(itertools.product(string.ascii_lowercase, repeat=3), 9000):
+            w.writerow(["de" + "".join(t) + "xxxxx", "", "", "x", "", 0, 0, "", 0, 0, ""])
+        w.writerow(["dictionary", "", "", "词典", "", 0, 0, "", 0, 0, ""])
+    eng = DictEngine([(str(path), "ECDICT")], cache_dir=tmp_path / "cache")
+    assert eng.fuzzy("dictionery", max_dist=1) == ["dictionary"]

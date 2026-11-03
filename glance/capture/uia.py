@@ -36,6 +36,17 @@ def window_class_at(x: int, y: int) -> str:
         return ""
 
 
+def foreground_class() -> str:
+    try:
+        user32.GetForegroundWindow.restype = ctypes.c_void_p
+        hwnd = user32.GetForegroundWindow()
+        buf = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(ctypes.c_void_p(hwnd), buf, 256)
+        return buf.value
+    except Exception:
+        return ""
+
+
 class TextCapture:
     """对屏幕任意位置读文字（每个线程各用一个实例）。"""
 
@@ -81,7 +92,9 @@ class TextCapture:
         return None
 
     def selection(self) -> str | None:
-        """读当前程序里选中的文字（不碰剪贴板）。"""
+        """读当前程序里选中的文字（不碰剪贴板）。浏览器里不读（原因同取词），交给模拟复制。"""
+        if foreground_class().startswith(SKIP_CLASSES):
+            return None
         try:
             elem = self._uia.GetFocusedElement()
             if elem is None:

@@ -114,6 +114,16 @@
     $("scroll").scrollTop = 0;
     return naturalHeight();
   };
+  // 一条提示（隐藏了托盘图标时代替托盘气泡）
+  WW.message = function (msg) {
+    data = null; tab = -1;
+    $("card").innerHTML = '<div class="wc-note" style="margin:0;font-size:13px;color:var(--text)">' + WW.esc(msg) + "</div>";
+    $("card").classList.remove("hidden");
+    $("rich").classList.add("hidden");
+    $("tabs").classList.add("hidden"); $("tabs").innerHTML = "";
+    $("scroll").scrollTop = 0;
+    return naturalHeight();
+  };
   WW.reset = function () { pinned = false; };
   WW.setSaved = function (b) { saved = !!b; if (data) renderCard(); };
   WW.speakHead = function () { if (data && data.card) WW.sayWord(data.card); };
@@ -140,14 +150,13 @@
       });
     }
   });
-  document.addEventListener("keydown", function (e) {
+  // ← → 切换词典：浮窗拿不到键盘焦点，按键由程序转过来（鼠标在浮窗上时）
+  WW.step = function (d) {
     if (!data || !(data.entries || []).length) return;
-    if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
-      var n = data.entries.length, i = tab + (e.key === "ArrowRight" ? 1 : -1);
-      if (i < -1) i = n - 1; if (i >= n) i = -1;
-      showTab(i); resize();
-    }
-  });
+    var n = data.entries.length, i = tab + (d > 0 ? 1 : -1);
+    if (i < -1) i = n - 1; if (i >= n) i = -1;
+    showTab(i); resize();
+  };
   WW.boot("float");
 })();
 </script>

@@ -23,6 +23,8 @@ HOTKEY_LABELS = {
 # 取词方式：按住修饰键取词（默认，读文章时不会乱弹）/ 鼠标停住就取词 / 只用快捷键
 CAPTURE_MODES = ("modifier", "hover", "off")
 CAPTURE_MODIFIERS = ("shift", "ctrl", "alt")
+# 划词按钮：选文字时按住这个键才出（none = 不用按键，一拖就出，容易误弹）
+SELECTION_KEYS = ("ctrl", "alt", "shift", "none")
 
 DEFAULT_CONFIG: dict = {
     "dictionaries": [],
@@ -41,6 +43,7 @@ DEFAULT_CONFIG: dict = {
     "capture_only_english": True,
     "highlight_word": True,          # 取词时在屏幕上标出取到的那个词
     "selection_button": True,        # 选中文字后在旁边出一个「译」按钮
+    "selection_button_key": "ctrl",  # 按住它再划词才出按钮，免得拖窗口、框选文件时也弹
     "online_translate": True,
     "baidu_appid": "",
     "baidu_key": "",
@@ -183,6 +186,8 @@ def apply_settings(cfg: dict, payload: dict, valid_hotkey) -> tuple[dict, str | 
         cfg["capture_mode"] = payload["capture_mode"]
     if payload.get("capture_modifier") in CAPTURE_MODIFIERS:
         cfg["capture_modifier"] = payload["capture_modifier"]
+    if payload.get("selection_button_key") in SELECTION_KEYS:
+        cfg["selection_button_key"] = payload["selection_button_key"]
     if "hover_delay_ms" in payload:
         v = _clamp(payload["hover_delay_ms"], 200, 2000, int)
         if v is not None:

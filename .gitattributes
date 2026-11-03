@@ -1,0 +1,2 @@
+# Windows 的批处理用 CRLF 换行：LF 换行的 UTF-8 批处理偶尔会被 cmd 读错中文行
+*.bat text eol=crlf

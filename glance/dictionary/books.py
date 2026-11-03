@@ -159,22 +159,22 @@ class DictBook:
         w = self._fold(word)
         if len(w) < 3:
             return []
-        best = []
-        scanned = 0
-        lo = bisect.bisect_left(self._sorted, w[0])
-        for k in self._sorted[lo:]:
-            if not k.startswith(w[0]):
-                break
-            if abs(len(k) - len(w)) > max_dist:
-                continue
-            scanned += 1
-            if scanned > 20000:
-                break
-            d = edit_distance(k, w, max_dist)
-            if 0 < d <= max_dist:
-                best.append((d, len(k), k))
-        best.sort()
-        return [k for _d, _l, k in best[:5]]
+        best = set()
+        for prefix, cap in ((w[:2], 20000), (w[0], 20000)):  # 同 ECDICT：先查前两个字母相同的
+            scanned = 0
+            lo = bisect.bisect_left(self._sorted, prefix)
+            for k in self._sorted[lo:]:
+                if not k.startswith(prefix):
+                    break
+                if abs(len(k) - len(w)) > max_dist:
+                    continue
+                scanned += 1
+                if scanned > cap:
+                    break
+                d = edit_distance(k, w, max_dist)
+                if 0 < d <= max_dist:
+                    best.add((d, len(k), k))
+        return [k for _d, _l, k in sorted(best)[:5]]
 
     def rank(self, word: str) -> int | None:
         return None  # mdx 词典没有词频信息
@@ -358,8 +358,13 @@ class EcdictBook:
         sw = strip_word(w)
         if len(w) < 3 or not sw:
             return []
-        rows = self._prefix_rows(sw[0], "AND length(sw) BETWEEN ? AND ?",
-                                 len(sw) - max_dist, len(sw) + max_dist, limit=8000)
+        # 先查前两个字母相同的（拼错多在后面，这一段词少，不会被条数上限截断），
+        # 再按首字母补一遍：只按首字母查的话，按字母排在后面的词（d 开头里的 dictionary）会被截掉
+        span = (len(sw) - max_dist, len(sw) + max_dist)
+        rows = []
+        if len(sw) >= 2:
+            rows += self._prefix_rows(sw[:2], "AND length(sw) BETWEEN ? AND ?", *span, limit=20000)
+        rows += self._prefix_rows(sw[0], "AND length(sw) BETWEEN ? AND ?", *span, limit=8000)
         best = set()
         for (k,) in rows:
             k = k.casefold()

@@ -85,3 +85,22 @@ def test_migrate_renamed_data(tmp_path):
     paths = [d["path"] for d in json.loads((new / "config.json").read_text(encoding="utf-8"))["dictionaries"]]
     assert paths == [str(new / "词库" / "ecdict.csv"), "D:\\词典\\oald.mdx"]
     assert not migrate_renamed_data(old, new, log=lambda m: None)  # 新目录已存在：不再覆盖
+
+
+def test_apply_settings_selection_key(tmp_path):
+    c = Config(tmp_path / "c.json", log=lambda m: None)
+    assert c["selection_button_key"] == "ctrl"
+    apply_settings(c, {"selection_button_key": "none"}, _valid)
+    assert c["selection_button_key"] == "none"
+    apply_settings(c, {"selection_button_key": "win"}, _valid)  # 不认识的值不改
+    assert c["selection_button_key"] == "none"
+
+
+def test_broken_vocab_is_backed_up_not_overwritten(tmp_path):
+    path = tmp_path / "生词本.json"
+    path.write_text('[{"word": "abandon"}', encoding="utf-8")  # 少了右括号
+    v = Vocab(path, log=lambda m: None)
+    assert v.add("hello")
+    backups = list(tmp_path.glob("生词本.broken_*.json"))
+    assert len(backups) == 1 and "abandon" in backups[0].read_text(encoding="utf-8")
+    assert [i["word"] for i in v.load()] == ["hello"]

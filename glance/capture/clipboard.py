@@ -74,6 +74,77 @@ def set_clipboard_text(text: str) -> bool:
         user32.CloseClipboard()
 
 
+# ---------- 整个剪贴板的备份 / 还原（图片、文件等非文字内容也不丢） ----------
+# 这些格式存的是图形句柄而不是内存块，没法按字节复制；对应的 DIB / 文字格式会一起备份，系统能从它们重新生成
+_HANDLE_FORMATS = {2, 3, 9, 14, 0x80, 0x82, 0x83, 0x8E}  # BITMAP METAFILEPICT PALETTE ENHMETAFILE OWNERDISPLAY DSP*
+
+
+def _win_clipboard_api():
+    k = ctypes.windll.kernel32
+    k.GlobalLock.restype = ctypes.c_void_p
+    k.GlobalLock.argtypes = [ctypes.c_void_p]
+    k.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    k.GlobalSize.restype = ctypes.c_size_t
+    k.GlobalSize.argtypes = [ctypes.c_void_p]
+    k.GlobalAlloc.restype = ctypes.c_void_p
+    k.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+    k.GlobalFree.argtypes = [ctypes.c_void_p]
+    user32.GetClipboardData.restype = ctypes.c_void_p
+    user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+    user32.SetClipboardData.restype = ctypes.c_void_p
+    user32.EnumClipboardFormats.restype = ctypes.c_uint
+    user32.EnumClipboardFormats.argtypes = [ctypes.c_uint]
+    return k
+
+
+def snapshot_clipboard(limit: int = 64 << 20) -> list[tuple[int, bytes]] | None:
+    """按格式备份剪贴板里能复制的内容；打不开剪贴板返回 None（这时不要去还原）。"""
+    k = _win_clipboard_api()
+    if not _open_clipboard():
+        return None
+    out, total = [], 0
+    try:
+        fmt = user32.EnumClipboardFormats(0)
+        while fmt:
+            if fmt not in _HANDLE_FORMATS and not 0x200 <= fmt <= 0x3FF:  # 私有格式、GDI 对象格式也是句柄
+                h = user32.GetClipboardData(fmt)
+                size = k.GlobalSize(h) if h else 0
+                if size and total + size <= limit:
+                    ptr = k.GlobalLock(h)
+                    if ptr:
+                        try:
+                            out.append((fmt, ctypes.string_at(ptr, size)))
+                            total += size
+                        finally:
+                            k.GlobalUnlock(h)
+            fmt = user32.EnumClipboardFormats(fmt)
+    finally:
+        user32.CloseClipboard()
+    return out
+
+
+def restore_clipboard(items: list[tuple[int, bytes]]) -> bool:
+    k = _win_clipboard_api()
+    if not _open_clipboard():
+        return False
+    try:
+        user32.EmptyClipboard()
+        for fmt, data in items:
+            h = k.GlobalAlloc(0x0002, len(data))  # GMEM_MOVEABLE
+            ptr = k.GlobalLock(h) if h else None
+            if not ptr:
+                if h:
+                    k.GlobalFree(h)
+                continue
+            ctypes.memmove(ptr, data, len(data))
+            k.GlobalUnlock(h)
+            if not user32.SetClipboardData(fmt, h):
+                k.GlobalFree(h)
+        return True
+    finally:
+        user32.CloseClipboard()
+
+
 VK_SHIFT, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN, VK_C = 0x10, 0x11, 0x12, 0x5B, 0x5C, 0x43
 VK_MASK = 0xE8          # 未分配的虚拟键：抬起 Alt/Win 前按一下，避免目标程序把它当成「打开菜单」
 KEYEVENTF_KEYUP = 0x0002
@@ -113,12 +184,15 @@ def copy_selection() -> None:
 
 
 def copy_selection_text(timeout: float = 0.6) -> str | None:
-    """模拟复制读出选中的文字，读完把剪贴板里原来的文字放回去。
+    """模拟复制读出选中的文字，读完把剪贴板原来的内容（文字、图片、文件都算）放回去。
 
     用剪贴板序号判断「这次复制成功了没有」，选中内容和剪贴板原有内容相同也能识别。
     """
     user32.GetClipboardSequenceNumber.restype = ctypes.c_ulong
-    old_text = get_clipboard_text()
+    try:
+        saved = snapshot_clipboard()
+    except Exception:
+        saved = None
     seq = user32.GetClipboardSequenceNumber()
     copy_selection()
     text = None
@@ -129,7 +203,10 @@ def copy_selection_text(timeout: float = 0.6) -> str | None:
             time.sleep(0.03)  # 有的程序分几次写剪贴板，稍等再读
             text = get_clipboard_text()
             break
-    if text is not None and old_text is not None and text != old_text:
-        set_clipboard_text(old_text)
+    if user32.GetClipboardSequenceNumber() != seq and saved is not None:
+        try:
+            restore_clipboard(saved)
+        except Exception:
+            pass
     text = (text or "").replace("\x00", "").strip()
     return text or None

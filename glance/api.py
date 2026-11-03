@@ -133,6 +133,11 @@ class Api:
         self._app.save_settings({"font_scale": scale})
         return self._app.prefs()
 
+    def hotkeys_pause(self, on: bool) -> None:
+        """设置里开始 / 结束录快捷键。"""
+        if self._app.hotkeys is not None:
+            self._app.hotkeys.pause(bool(on))
+
     def pick_dictionary(self):
         """打开文件对话框选一本词典（.mdx，或 ECDICT 的 .csv / .db）。"""
         import webview

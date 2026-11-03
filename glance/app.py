@@ -27,7 +27,7 @@ from .config import HOTKEY_LABELS, Config, apply_settings, hotkey_text
 from .dictionary import DictEngine, build_card, enrich_from_mdx
 from .dictionary.card import mdx_audio
 from .dictionary.resources import ref_path, rewrite_html
-from .hotkeys import HotkeyThread, valid_hotkey
+from .hotkeys import VK_ESCAPE, VK_LEFT, VK_RIGHT, HotkeyThread, valid_hotkey
 from .hover import HoverController, Inputs
 from .log import LOG_FILE, log
 from .paths import (BASE, DATA, DICT_DIR, EXPORT_DIR, FROZEN, HISTORY_PATH, INDEX_DIR, PORTABLE,
@@ -80,11 +80,14 @@ class App:
         self._cap_seq = 0
         # 划词按钮
         self._drag_start: tuple | None = None
+        self._drag_key = False  # 这次按下左键期间有没有按住划词键
         self._last_click = (0.0, (0, 0))
         self._sel_shown_at = 0.0
         self._sel_pos = (0, 0)
         self._sel_owner = 0
         self._notes: dict[str, float] = {}
+        self._msg_seq = 0  # 浮窗提示的序号：新提示或新取词出来后，旧提示的定时收起不再生效
+        self._temp_keys: set[int] = set()  # 浮窗开着时临时独占的键（Esc / ← / →）
         from .sapi import SapiSpeaker
         self.sapi = SapiSpeaker(log)
 
@@ -181,11 +184,42 @@ class App:
         if now - self._notes.get(msg, 0) < interval:
             return
         self._notes[msg] = now
+        if self.cfg.get("hide_tray_icon"):  # 没有托盘就没有气泡：改在鼠标旁边用浮窗显示
+            threading.Thread(target=self.show_message, args=(msg,), daemon=True).start()
+            return
         try:
             if self.tray is not None and getattr(self.tray, "HAS_NOTIFICATION", False):
                 self.tray.notify(msg, "一瞥")
         except Exception as e:
             log(f"[提示] 气泡失败 {e!r}")
+
+    def show_message(self, msg: str, seconds: float = 6.0) -> None:
+        """在鼠标旁边用浮窗显示一条提示（隐藏了托盘图标时代替气泡），几秒后自动收起，Esc 也能关。"""
+        w = self.wm.wins["float"]
+        for _ in range(100):  # 刚启动时浮窗可能还没备好
+            if w.primed:
+                break
+            time.sleep(0.1)
+        else:
+            return
+        h = self.wm.call("float", "message", msg)
+        x, y = win32.cursor_pos()
+        with self._float_lock:
+            self.float_word = ""
+            self.float_box = (x, y, x + 1, y + 1)
+            self._msg_seq += 1
+            seq = self._msg_seq
+        if self.highlight is not None:
+            self.highlight.hide()
+        self._place_float(int(h or 0))
+        self.hover.pinned = True  # 鼠标移开也不收，到时间再收
+
+        def expire():
+            with self._float_lock:
+                mine = self._msg_seq == seq and self.float_word == ""
+            if mine and self.hover.visible:
+                self.hide_float()
+        threading.Timer(seconds, expire).start()
 
     def prefs(self) -> dict:
         return {"font_scale": float(self.cfg.get("font_scale", 1.0) or 1.0),
@@ -311,6 +345,10 @@ class App:
 
     # ================= 浮窗 =================
     def show_float(self, data: dict, box: tuple) -> None:
+        with self._float_lock:
+            if self.hover.visible and self.float_word == "" and self.hover.pinned:
+                self.hover.pinned = False  # 浮窗上显示的是提示：新的词出来后照常自动收起
+            self._msg_seq += 1
         data = dict(data, pinned=self.hover.pinned, prefs=self.prefs())
         h_css = self.wm.call("float", "render", data)
         try:
@@ -369,19 +407,33 @@ class App:
         mod_name = self.cfg.get("capture_modifier", "shift")
         self.hover.mode = self.cfg.get("capture_mode", "modifier")
         self.hover.hover_delay = self.cfg.get("hover_delay_ms", 450) / 1000
-        lbutton = win32.key_down(win32.VK_LBUTTON)
+        lbutton = win32.primary_button_down()
         in_own = win32.own_window_at(*pos)
         inputs = Inputs(now=now, pos=pos,
                         modifier=self.hover.mode == "modifier" and win32.only_modifier_down(mod_name),
-                        lbutton=lbutton, in_own_window=in_own,
-                        esc=self.hover.visible and win32.key_down(win32.VK_ESCAPE))
+                        lbutton=lbutton, in_own_window=in_own)
         for act in self.hover.tick(inputs):
             if act[0] == "capture" and self.engine is not None:
                 self.request_capture(act[1], act[2])
             elif act[0] == "hide":
                 self.hide_float()
+        self._sync_temp_keys(pos)
         if self.cfg.get("selection_button", True):
             self._selection_tick(now, pos, lbutton, in_own)
+
+    def _sync_temp_keys(self, pos) -> None:
+        """浮窗开着时 Esc 归一瞥（收起浮窗，不再顺带传给后面的程序）；
+        鼠标在浮窗上时 ← → 也归一瞥（切换词典）。浮窗不接收键盘焦点，只能这样拿到按键。"""
+        if self.hotkeys is None:
+            return
+        want = set()
+        if self.hover.visible:
+            want.add(VK_ESCAPE)
+            if self.hover._inside(self.hover.card_rect, pos):
+                want |= {VK_LEFT, VK_RIGHT}
+        for vk in want ^ self._temp_keys:
+            self.hotkeys.set_temp(vk, vk in want)
+        self._temp_keys = want
 
     # ---------- 划词按钮 ----------
     def _selection_tick(self, now: float, pos, lbutton: bool, in_own: bool) -> None:
@@ -389,9 +441,13 @@ class App:
             far = abs(pos[0] - self._sel_pos[0]) > 160 or abs(pos[1] - self._sel_pos[1]) > 120
             if (now - self._sel_shown_at > 4 and not in_own) or far or (lbutton and not in_own):
                 self.hide_selection_button()
+        vk = win32.MODIFIER_VK.get(self.cfg.get("selection_button_key", "ctrl"))
         if lbutton and self._drag_start is None and not in_own:
             self._drag_start = (pos, now)
-        elif not lbutton and self._drag_start is not None:
+            self._drag_key = False
+        if lbutton and self._drag_start is not None and vk and win32.key_down(vk):
+            self._drag_key = True  # 松开左键前任何时候按住过都算：先按键再拖、拖到一半再按都行
+        if not lbutton and self._drag_start is not None:
             (sx, sy), t0 = self._drag_start
             self._drag_start = None
             if in_own:
@@ -400,7 +456,7 @@ class App:
             last_t, last_p = self._last_click
             double = now - last_t < 0.45 and abs(pos[0] - last_p[0]) < 5 and abs(pos[1] - last_p[1]) < 5
             self._last_click = (now, pos)
-            if dragged or double:
+            if (dragged or double) and (vk is None or self._drag_key):
                 self.show_selection_button(pos)
 
     def show_selection_button(self, pos) -> None:
@@ -444,6 +500,12 @@ class App:
             self.toggle_capture()
         elif action == "quit":
             self.exit()
+        elif action == "key:esc":
+            if self.hover.visible:
+                self.hide_float()
+        elif action in ("key:left", "key:right"):
+            if self.hover.visible:
+                self.wm.call("float", "step", -1 if action == "key:left" else 1)
 
     def toggle_capture(self) -> None:
         mode = self.cfg.get("capture_mode")
@@ -546,8 +608,8 @@ class App:
             "data_dir": str(DATA),
             **{k: self.cfg.get(k) for k in (
                 "capture_mode", "capture_modifier", "hover_delay_ms", "capture_only_english",
-                "highlight_word", "selection_button", "online_translate", "baidu_appid", "baidu_key",
-                "accent", "auto_speak", "font_scale", "theme", "entry_style", "hide_tray_icon")},
+                "highlight_word", "selection_button", "selection_button_key", "online_translate",
+                "baidu_appid", "baidu_key", "accent", "auto_speak", "font_scale", "theme", "entry_style", "hide_tray_icon")},
             "autostart": autostart.enabled(),
             "prefs": self.prefs(),
         }

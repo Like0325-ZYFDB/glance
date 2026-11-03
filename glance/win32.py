@@ -61,6 +61,12 @@ def key_down(vk: int) -> bool:
     return bool(user32.GetAsyncKeyState(vk) & 0x8000)
 
 
+def primary_button_down() -> bool:
+    """鼠标主键按着没有。GetAsyncKeyState 看的是物理左右键，左手习惯（左右键对调）时主键是物理右键。"""
+    swapped = bool(user32.GetSystemMetrics(23))  # SM_SWAPBUTTON
+    return key_down(0x02 if swapped else VK_LBUTTON)
+
+
 def only_modifier_down(name: str) -> bool:
     """只按着这一个修饰键（按 Ctrl+Alt+T 之类的快捷键时不算）。"""
     vk = MODIFIER_VK.get(name)

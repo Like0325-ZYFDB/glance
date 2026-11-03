@@ -17,11 +17,25 @@ class JsonList:
         self._lock = threading.Lock()
 
     def load(self) -> list:
+        if not self.path.exists():
+            return []
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
-            return data if isinstance(data, list) else []
-        except Exception:
+            if not isinstance(data, list):
+                raise ValueError("不是 JSON 列表")
+            return data
+        except Exception as e:
+            self._backup_broken(e)
             return []
+
+    def _backup_broken(self, err) -> None:
+        """文件读不出来：先挪成备份再当空列表用，免得下一次保存把原内容整个覆盖掉。"""
+        backup = self.path.with_name(f"{self.path.stem}.broken_{time.strftime('%Y%m%d_%H%M%S')}{self.path.suffix}")
+        try:
+            self.path.replace(backup)
+            self._log(f"[读取] {self.path.name} 读不出来，原文件已备份为 {backup.name}: {err!r}")
+        except Exception as e:
+            self._log(f"[读取] {self.path.name} 读不出来，备份也失败了 {e!r}")
 
     def save(self, items: list) -> None:
         try:

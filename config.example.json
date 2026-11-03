@@ -17,6 +17,7 @@
   "capture_only_english": true,
   "highlight_word": true,
   "selection_button": true,
+  "selection_button_key": "ctrl",
   "online_translate": true,
   "baidu_appid": "",
   "baidu_key": "",

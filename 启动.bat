@@ -3,7 +3,8 @@ chcp 65001 >nul
 title 一瞥 · 取词助手
 cd /d %~dp0
 
-if not exist venv\Scripts\pythonw.exe (
+rem 依赖装完才写 venv\installed.txt：上次装到一半断了的话，这次会接着装，而不是带着残缺的环境启动
+if not exist venv\installed.txt (
     echo 首次运行：正在创建运行环境并安装依赖（需要联网，约 1-3 分钟）...
     where python >nul 2>nul
     if errorlevel 1 (
@@ -15,7 +16,7 @@ if not exist venv\Scripts\pythonw.exe (
         pause
         exit /b 1
     )
-    python -m venv venv
+    if not exist venv\Scripts\python.exe python -m venv venv
     if errorlevel 1 (
         echo 创建虚拟环境失败。
         pause
@@ -29,6 +30,7 @@ if not exist venv\Scripts\pythonw.exe (
         pause
         exit /b 1
     )
+    echo ok> venv\installed.txt
     echo 环境准备完成。
 )
 
