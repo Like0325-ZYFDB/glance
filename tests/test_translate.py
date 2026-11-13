@@ -201,3 +201,125 @@ def test_mymemory_rejects_quota_response_even_when_http_succeeds(monkeypatch):
 
     monkeypatch.setattr(tr, "_SESSION", FakeSession())
     assert tr._mymemory("A sample sentence.") is None
+
+
+def test_short_text_keeps_what_the_top_source_says(monkeypatch):
+    """专有名词：必应原样返回是对的，不换成别家的硬译，也不去问兜底来源；结果记进缓存。"""
+    _setup()
+    calls = []
+
+    def bing(text):
+        calls.append("必应")
+        return text
+
+    def google(text):
+        calls.append("谷歌")
+        return "聊天GPT"
+
+    def mymemory(text):
+        calls.append("MyMemory")
+        return "不相干的一句话"
+
+    monkeypatch.setattr(tr, "SOURCES", [("必应翻译", bing), ("谷歌翻译", google), ("MyMemory", mymemory)])
+    assert tr.translate("ChatGPT") is None
+    assert tr.last_status() == "unchanged" and tr.last_source() == "必应翻译"
+    assert "MyMemory" not in calls
+    before = len(calls)
+    assert tr.translate("ChatGPT") is None and tr.last_status() == "unchanged"
+    assert len(calls) == before              # 第二次走缓存，不再联网
+
+
+def test_short_text_uses_lower_source_when_top_one_is_unreachable():
+    _setup()
+
+    def down(text):
+        raise TimeoutError
+
+    assert tr.translate("serendipity", [("必应翻译", down), ("谷歌翻译", lambda t: "意外之喜")]) == "意外之喜"
+    assert tr.last_status() == "ok" and tr.last_source() == "谷歌翻译"
+
+
+def test_sentence_prefers_a_real_translation_over_an_echo():
+    """整句话被原样返回多半是那个来源没翻：有别的来源给了译文就用译文。"""
+    _setup()
+    text = "This sentence is long enough to count as a sentence."
+    srcs = [("必应翻译", lambda t: t), ("谷歌翻译", lambda t: "这句话足够长，算得上一个句子。")]
+    assert tr.translate(text, srcs) == "这句话足够长，算得上一个句子。"
+    assert tr.last_source() == "谷歌翻译" and tr.last_status() == "ok"
+    assert tr.translate(text, [("必应翻译", lambda t: t)]) is None and tr.last_status() == "unchanged"
+
+
+def test_fallback_only_when_no_primary_answers():
+    _setup()
+    called = []
+
+    def mymemory(text):
+        called.append(text)
+        return "兜底结果"
+
+    def down(text):
+        raise TimeoutError
+
+    assert tr.translate("xyzzy", [("必应翻译", lambda t: t), ("MyMemory", mymemory)]) is None
+    assert not called and tr.last_status() == "unchanged"
+    assert tr.translate("hello", [("必应翻译", down), ("MyMemory", mymemory)]) == "兜底结果"
+    assert tr.translate("hello", [("必应翻译", down), ("MyMemory", lambda t: t)]) is None
+    assert tr.last_status() == "failed"      # 兜底来源原样返回不可信
+
+
+def test_direction_of_mixed_text():
+    _setup()
+    # 夹着命令、术语的中文：翻成英文
+    assert tr._is_chinese("运行 npm install 然后 npm run dev")
+    assert tr._is_chinese("使用 git rebase -i HEAD~3 修改 commit message")
+    assert tr._is_chinese("中文里夹着一个の字的句子，应该还是中文。")
+    # 引了中文词的英文句子、日文：翻成中文
+    assert not tr._is_chinese("The words 你好 and 谢谢 are common greetings.")
+    assert not tr._is_chinese("東京都渋谷区の天気")
+    assert not tr._is_chinese("の")
+    # 方向说不准的原文，来源往哪边翻都接受
+    mixed = "运行 npm install 然后 npm run dev"
+    assert tr.translate(mixed, [("必应翻译", lambda t: "Run npm install and then npm run dev")])
+    assert tr.translate(mixed, [("必应翻译", lambda t: "运行 npm 安装，然后运行 npm 开发")])
+
+
+def test_google_splits_long_chinese(monkeypatch):
+    """谷歌端点把原文放在网址里：3000 个汉字要分几次请求，拼回来不丢内容。"""
+    _setup()
+    asked = []
+
+    class FakeSession:
+        def get(self, url, params, timeout):
+            asked.append(params["q"])
+            return _Resp(data=[[[f"<{params['q']}>", params["q"]]]])
+
+    monkeypatch.setattr(tr, "_SESSION", FakeSession())
+    text = "这是一句用来凑长度的中文。" * 230
+    out = tr._google(text)
+    assert len(asked) >= 3 and all(len(q.encode("utf-8")) <= tr.GOOGLE_LIMIT for q in asked)
+    assert out.replace("<", "").replace(">", "").replace(" ", "") == text
+
+
+def test_parallel_chunks_keep_order():
+    def slow_first(chunk):
+        time.sleep(0.2 if chunk == "one" else 0)
+        return chunk.upper()
+
+    out = tr._translate_chunks(["one ", "two ", "three"], slow_first, True, parallel=True)
+    assert out == "ONE TWO THREE"
+    assert tr._translate_chunks(["one ", "two "], lambda c: None if c == "two" else c, True, parallel=True) is None
+
+
+def test_long_text_gets_more_time(monkeypatch):
+    """长原文多给时间，而且兜底来源接不了的长度不给它留时间。"""
+    _setup()
+    text = "Read this whole sentence. " * 110
+
+    def slow(t):
+        time.sleep(0.6)
+        return "译文"
+
+    monkeypatch.setattr(tr, "DEADLINE", 0.4)    # 短原文只等 0.4 秒；这段有 2800 多字，另加 9 秒多
+    monkeypatch.setattr(tr, "SOURCES", [("必应翻译", slow), ("MyMemory", lambda t: "兜底")])
+    assert tr.translate(text) == "译文" and tr.last_source() == "必应翻译"
+    assert tr.translate("hello") == "兜底"

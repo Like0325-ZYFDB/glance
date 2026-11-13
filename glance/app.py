@@ -388,7 +388,9 @@ class App:
         if online:
             self.show_float(dict(data, online={"text": online[0], "source": online[1]}), box)
         elif manual or self.hover.pinned:
-            self.show_float(dict(data, online=None, status=data.get("status") or "词典里没有这个词，联网翻译也没有结果"), box)
+            why = ("词典里没有这个词；多半是专有名词，不用翻译" if translate.last_status() == "unchanged"
+                   else "词典里没有这个词，联网翻译也没有结果")
+            self.show_float(dict(data, online=None, status=data.get("status") or why), box)
         else:
             self.hide_float()  # 按住键扫过的词翻不出来（多半是认错的字）：直接收起，不留空浮窗
 
@@ -660,10 +662,14 @@ class App:
         if not payload["loading"]:
             return
         translated = translate.translate(text)
+        result = {**payload, "loading": False, "translated": translated, "source": translate.last_source()}
+        if not translated:
+            result["error"] = ("这段文字不用翻译：翻译服务原样返回了它（多半是专有名词、数字或代码）。"
+                               if translate.last_status() == "unchanged"
+                               else "没取到译文：翻译服务暂时连不上或没有回应，稍后再试。")
         with self._translate_lock:
             if request_id == self._translate_seq:
-                self.wm.call("translate", "render", {
-                    **payload, "loading": False, "translated": translated, "source": translate.last_source()})
+                self.wm.call("translate", "render", result)
 
     # ================= 设置 =================
     def settings_payload(self) -> dict:

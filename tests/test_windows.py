@@ -144,3 +144,38 @@ def test_translate_selection_quiet(monkeypatch):
     assert notes == []
     app.App.translate_selection(fake)
     assert len(notes) == 1 and "没读到" in notes[0]
+
+
+def test_fill_online_unchanged_says_so(monkeypatch):
+    """翻译服务把词原样返回（专有名词）：手动取词时说明不用翻译，而不是「没有结果」。"""
+    from glance import app, translate
+    monkeypatch.setattr(translate, "translate", lambda t, deadline=10.0: None)
+    monkeypatch.setattr(translate, "last_status", lambda: "unchanged")
+    data = {"query": "xenial", "card": None, "online": {"loading": True}}
+    fake = _fake_float_app(app)
+    app.App._fill_online(fake, "xenial", data, (1, 2, 3, 4), True)
+    assert fake.shown and "专有名词" in fake.shown[0][0]["status"]
+
+
+def test_show_translate_explains_missing_translation(monkeypatch):
+    """翻译窗口：没有译文时按原因给提示。"""
+    import threading
+    from types import SimpleNamespace
+
+    from glance import app, translate
+    rendered = []
+    fake = SimpleNamespace(
+        _translate_lock=threading.Lock(), _translate_seq=0, hover=SimpleNamespace(visible=False),
+        cfg={"online_translate": True}, engine=None, prefs=lambda: {},
+        wm=SimpleNamespace(call=lambda name, func, data: rendered.append(data), show_window=lambda name: None))
+    monkeypatch.setattr(translate, "translate", lambda t: None)
+    monkeypatch.setattr(translate, "last_source", lambda: "必应翻译")
+    monkeypatch.setattr(translate, "last_status", lambda: "unchanged")
+    app.App.show_translate(fake, "ChatGPT")
+    assert rendered[0]["loading"] and "不用翻译" in rendered[-1]["error"]
+    monkeypatch.setattr(translate, "last_status", lambda: "failed")
+    app.App.show_translate(fake, "hello world")
+    assert "没取到译文" in rendered[-1]["error"]
+    monkeypatch.setattr(translate, "translate", lambda t: "你好，世界")
+    app.App.show_translate(fake, "hello world")
+    assert rendered[-1]["translated"] == "你好，世界" and "error" not in rendered[-1]
