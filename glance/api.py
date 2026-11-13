@@ -109,7 +109,7 @@ class Api:
 
     # ---------- 翻译 ----------
     def translate_text(self, text: str) -> None:
-        _bg(self._app.show_translate, (text or "").strip()[:3000])
+        _bg(self._app.show_translate, (text or "").strip())
 
     def copy(self, text: str) -> None:
         self._app.copy(text)

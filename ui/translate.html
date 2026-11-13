@@ -49,15 +49,17 @@
   $("copyBtn").innerHTML = WW.icon("copy");
 
   WW.render = function (d) {
+    var src = $("src");
+    var sameRequest = data.requestId === d.requestId;
     data = d || {};
     if (d.prefs) WW.setPrefs(d.prefs);
-    $("src").value = d.original || "";
+    if (!sameRequest) src.value = d.original || "";
     var dst = $("dst");
     if (d.loading) { dst.className = "loading"; dst.textContent = "翻译中…"; $("srcName").textContent = ""; }
     else if (d.translated) { dst.className = ""; dst.textContent = d.translated; $("srcName").textContent = d.source ? "来自 " + d.source : ""; }
     else {
       dst.className = "loading";
-      dst.textContent = d.online === false ? "联网翻译已关闭（设置里可以打开），下面是句中生词" : "翻译失败：网络连不上翻译服务。可以在设置里填百度翻译的密钥";
+      dst.textContent = d.error || (d.online === false ? "联网翻译已关闭" : "暂未取得有效译文，请重试。");
       $("srcName").textContent = "";
     }
     var words = d.words || [];

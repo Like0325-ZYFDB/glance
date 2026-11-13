@@ -79,6 +79,8 @@ class App:
         self._cap_busy = False
         self._cap_seq = 0
         self._word_tr: dict[str, tuple[str, str]] = {}  # 词典查不到的词的联网翻译缓存
+        self._translate_lock = threading.Lock()
+        self._translate_seq = 0
         # 划词按钮
         self._drag_start: tuple | None = None
         self._drag_key = False  # 这次按下左键期间有没有按住划词键
@@ -369,10 +371,12 @@ class App:
         text = (translate.translate(word, deadline=4.0) or "").strip()
         if not text or text.lower() == key:
             return None  # 翻不出来不缓存：下次再试
-        if len(self._word_tr) >= 500:
-            self._word_tr.clear()
-        self._word_tr[key] = (text, translate.last_source())
-        return self._word_tr[key]
+        result = (text, translate.last_source())
+        if result[1] != translate.FALLBACK:
+            if len(self._word_tr) >= 500:
+                self._word_tr.clear()
+            self._word_tr[key] = result
+        return result
 
     def _fill_online(self, word: str, data: dict, box: tuple, manual: bool) -> None:
         """后台取到联网翻译后填进浮窗；浮窗已经换了词或收起了就不管。"""
@@ -627,28 +631,39 @@ class App:
                 return
             self.notify(f"没读到选中的文字：先选中一段文字，再按 {hotkey_text(self.cfg['hotkeys']['translate'])}")
             return
-        self.show_translate(text.strip()[:3000])
+        self.show_translate(text.strip())
 
     def show_translate(self, text: str) -> None:
+        with self._translate_lock:
+            self._translate_seq += 1
+            request_id = self._translate_seq
         if self.hover.visible:
             self.hide_float()
         online = bool(self.cfg.get("online_translate", True))
+        limit = translate.MAX_TEXT_LENGTH
+        too_long = len(text) > limit
         # 句中生词查的是本地词典，马上就有：先和原文一起显示，联网译文回来再补上
         words = []
         if self.engine is not None and self.engine.books:
             def brief(w):
                 return card_brief(build_card(self.engine, w), 40) or ""
-            words = pick_new_words(text, brief, rank=self.engine.rank, saved=self.vocab.words())
-        self.wm.call("translate", "render", {"original": text, "loading": online, "online": online,
-                                             "words": words, "prefs": self.prefs()})
+            words = pick_new_words(text[:limit], brief, rank=self.engine.rank, saved=self.vocab.words())
+        payload = {"requestId": request_id, "original": text, "loading": online and not too_long,
+                   "online": online, "words": words, "prefs": self.prefs()}
+        if online and too_long:
+            payload["error"] = f"原文超过 {limit} 字，请分段翻译。"
+        with self._translate_lock:
+            if request_id != self._translate_seq:
+                return
+            self.wm.call("translate", "render", payload)
         self.wm.show_window("translate")
-        if not online:
+        if not payload["loading"]:
             return
         translated = translate.translate(text)
-        source = translate.last_source()
-        self.wm.call("translate", "render", {
-            "original": text, "loading": False, "translated": translated, "source": source,
-            "online": online, "words": words, "prefs": self.prefs()})
+        with self._translate_lock:
+            if request_id == self._translate_seq:
+                self.wm.call("translate", "render", {
+                    **payload, "loading": False, "translated": translated, "source": translate.last_source()})
 
     # ================= 设置 =================
     def settings_payload(self) -> dict:
@@ -685,6 +700,7 @@ class App:
         self.cfg.save()
         if "translate" in changes:
             translate.configure(self.cfg["baidu_appid"], self.cfg["baidu_key"])
+            self._word_tr.clear()
         if "autostart" in changes:
             autostart.set_enabled(self.cfg["autostart"], log)
         if "hotkeys" in changes and self.hotkeys:
